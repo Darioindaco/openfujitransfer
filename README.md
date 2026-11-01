@@ -102,9 +102,9 @@ bash packaging/build_macos.sh                 # → dist/OpenFujiTransfer-…-ma
 ```
 
 GitHub Actions bouwt bij elke push beide Mac-versies (zie het tabblad *Actions*).
-Een release met de `.dmg`'s maak je door een tag `v…` te pushen, of via
-*Actions → Test en bouw → Run workflow* met **release** aangevinkt (dan wordt de
-versie uit `open_fujitransfer/__init__.py` de tag).
+Een release met de `.dmg`'s komt er vanzelf zodra je het versienummer in
+`open_fujitransfer/__init__.py` ophoogt en naar `main` pusht. Het kan ook met een
+tag `v…` of via *Actions → Test en bouw → Run workflow* met **release** aangevinkt.
 
 ## Wat nog kan
 

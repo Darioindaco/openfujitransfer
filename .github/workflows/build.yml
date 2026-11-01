@@ -13,7 +13,7 @@ on:
         default: false
 
 permissions:
-  contents: write   # nodig om bij een tag een release te maken
+  contents: write   # nodig om een release te maken
 
 jobs:
   test:
@@ -49,15 +49,60 @@ jobs:
         with:
           name: OpenFujiTransfer-macos-${{ matrix.arch }}
           path: dist/*.dmg
-      - name: Versie uitlezen
+
+  # Een release komt er bij:
+  #  - een gepushte tag v…
+  #  - handmatig: Actions → Test en bouw → Run workflow → "release" aanvinken
+  #  - een push naar main met een nieuw versienummer in open_fujitransfer/__init__.py
+  release:
+    needs: macos
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versie en nieuwe-release-check
         id: version
-        run: echo "tag=v$(python -c 'import open_fujitransfer as o; print(o.__version__)')" >> "$GITHUB_OUTPUT"
-      # Release bij een gepushte tag v…, of handmatig via Actions → "Run workflow" → release aanvinken
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
-        uses: softprops/action-gh-release@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(python3 -c 'import open_fujitransfer as o; print(o.__version__)')"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG bestaat al."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Moet er een release komen?
+        id: decide
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] \
+             || [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.release }}" == "true" ]] \
+             || [[ "${{ github.event_name }}" == "push" && "${{ steps.version.outputs.new }}" == "true" ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.decide.outputs.go == 'true'
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.version.outputs.tag }}
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        if: steps.decide.outputs.go == 'true'
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
           name: Open FujiTransfer ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: dist/*.dmg
+          body: |
+            Download de `.dmg` voor jouw Mac:
+            - **arm64** — Apple Silicon (M1, M2, M3, …)
+            - **x86_64** — Intel-Mac
+
+            Eerste keer openen: rechtsklik → Open, en sta toegang tot het lokale netwerk toe.
+            Zie de [README](https://github.com/${{ github.repository }}#installeren).
