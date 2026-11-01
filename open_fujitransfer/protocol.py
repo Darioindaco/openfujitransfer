@@ -40,6 +40,7 @@ CT_COMMAND, CT_DATA, CT_RESPONSE = 1, 2, 3
 OC_OPEN_SESSION = 0x1002
 OC_CLOSE_SESSION = 0x1003
 OC_GET_OBJECT_INFO = 0x1008
+OC_GET_THUMB = 0x100A
 OC_GET_DEVICE_PROP_VALUE = 0x1015
 OC_SET_DEVICE_PROP_VALUE = 0x1016
 OC_TERMINATE_OPEN_CAPTURE = 0x1018
@@ -415,29 +416,50 @@ class FujiCamera:
         return list(range(1, self.num_objects + 1))
 
     def get_object_info(self, handle: int) -> ObjectInfo:
+        """Naam en datum van een foto.
+
+        Let op: de grootte klopt hier NIET (de camera meldt ~100 KB) tenzij D227
+        aan staat. Dat doen we bewust alleen vlak voor een download, want met
+        D227 aan wordt het bladeren door de kaart erg traag (zie libfuji).
+        """
         rc, data = self.transaction(OC_GET_OBJECT_INFO, (handle,))
         if rc != RC_OK:
             raise FujiError(f"Geen info voor foto {handle} (0x{rc:04X})")
         return parse_object_info(handle, data)
 
-    def with_correct_sizes(self):
-        """Contextmanager: zonder D227=1 meldt de camera altijd ~100 KB als grootte."""
-        cam = self
+    def get_thumb(self, handle: int) -> bytes | None:
+        """Kleine JPEG-preview. Nieuwere Fuji's blijven hangen op GetThumb als je
+        niet vlak ervoor GetObjectInfo voor dezelfde foto hebt gedaan."""
+        self.get_object_info(handle)
+        rc, data = self.transaction(OC_GET_THUMB, (handle,), timeout=20)
+        if rc != RC_OK or len(data) < 100:
+            log(f"geen thumbnail voor {handle} (0x{rc:04X}, {len(data)} bytes)")
+            return None
+        return data
 
-        class _Ctx:
-            def __enter__(self_inner):
-                cam.get_events()
-                cam.set_prop(P_ENABLE_CORRECT_FILE_SIZE, 1, 2, timeout=30)
+    def download_object(self, handle: int, choose_dest, progress=None, cancel=None):
+        """Download één foto, zoals de officiële app het doet:
+        D227 aan → info met de echte grootte → blokken ophalen → D227 uit.
 
-            def __exit__(self_inner, exc_type, exc, tb):
-                if exc_type is None:
-                    cam.get_events()
-                    cam.set_prop(P_ENABLE_CORRECT_FILE_SIZE, 0, 2)
-                return False
+        choose_dest(info) geeft het doelpad, of None om over te slaan
+        (bv. omdat je hem al hebt). Geeft (info, pad of None) terug.
+        """
+        self.get_events()
+        self.set_prop(P_ENABLE_CORRECT_FILE_SIZE, 1, 2, timeout=30)
+        try:
+            info = self.get_object_info(handle)
+            dest = choose_dest(info)
+            if dest is not None:
+                self._download_to(info, dest, progress, cancel)
+            return info, dest
+        finally:
+            try:
+                self.get_events()
+                self.set_prop(P_ENABLE_CORRECT_FILE_SIZE, 0, 2)
+            except (FujiError, OSError):
+                pass  # verbinding al weg; niks meer aan te doen
 
-        return _Ctx()
-
-    def download(self, info: ObjectInfo, dest: Path, progress=None, cancel=None) -> None:
+    def _download_to(self, info: ObjectInfo, dest: Path, progress=None, cancel=None) -> None:
         """Download in blokken van 1 MB naar een .part-bestand, dan hernoemen."""
         tmp = dest.with_name(dest.name + ".part")
         received = 0

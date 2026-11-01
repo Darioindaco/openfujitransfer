@@ -41,10 +41,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install pyinstaller==6.11.1
+      - run: python -m pip install pyinstaller==6.11.1 -r requirements.txt
       - run: bash packaging/build_macos.sh
       - name: Rooktest (binary start op als CLI)
-        run: '"dist/Open FujiTransfer.app/Contents/MacOS/Open FujiTransfer" --version'
+        run: |
+          "dist/Open FujiTransfer.app/Contents/MacOS/Open FujiTransfer" --version
+          "dist/Open FujiTransfer.app/Contents/MacOS/Open FujiTransfer" --selftest
       - uses: actions/upload-artifact@v4
         with:
           name: OpenFujiTransfer-macos-${{ matrix.arch }}

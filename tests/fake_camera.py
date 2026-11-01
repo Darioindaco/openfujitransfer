@@ -29,6 +29,28 @@ FILES = [
     ("DSCF0001.RAF", "20261030T101500", _rng.randbytes(3_100_000)),
     ("DSCF0002.JPG", "20261101T093000", _rng.randbytes(1_200_000)),
 ]
+# FAKE_FILES=60 voegt extra (kleine) foto's toe, handig om het bladervenster te zien
+for _n in range(int(os.environ.get("FAKE_FILES", "0"))):
+    _day = 1 + _n // 12
+    FILES.append((f"DSCF{_n + 100:04d}.JPG", f"202609{_day:02d}T{8 + _n % 12:02d}0000",
+                  _rng.randbytes(50_000 + _n * 997)))
+
+
+def make_thumb(i):
+    """Een echte kleine JPEG als Pillow er is, anders nep-bytes (genoeg voor tests)."""
+    try:
+        from PIL import Image, ImageDraw
+        import io
+        hue = (i * 47) % 255
+        img = Image.new("RGB", (160, 120), (hue, 120, 255 - hue))
+        d = ImageDraw.Draw(img)
+        d.ellipse([50, 30, 110, 90], fill=(240, 240, 230))
+        d.text((6, 100), FILES[i][0], fill=(255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG")
+        return buf.getvalue()
+    except ImportError:
+        return b"\xff\xd8" + bytes([i % 256]) * 400 + b"\xff\xd9"
 
 state = {
     0xDF00: 0,         # camera_state: eerst wachten op OK
@@ -79,6 +101,7 @@ def handle(c):
     c.sendall(struct.pack("<I", 4 + len(resp)) + resp)
 
     session_open = False
+    last_info = None  # nieuwere Fuji's: GetThumb alleen direct na GetObjectInfo
     while True:
         try:
             hdr = recv_exact(c, 4)
@@ -131,10 +154,22 @@ def handle(c):
         elif code == 0x1008:
             h = params[0]
             if 1 <= h <= len(FILES):
+                last_info = h
+                time.sleep(DELAY / 20)
                 send(c, 2, code, tid, object_info(h - 1))
                 send(c, 3, 0x2001, tid)
             else:
                 send(c, 3, 0x2009, tid)
+        elif code == 0x100A:
+            h = params[0]
+            if h != last_info:
+                print(f"[fake] GetThumb {h} zonder GetObjectInfo ervoor (echte camera hangt hier)")
+                send(c, 3, 0x2002, tid)
+            else:
+                time.sleep(DELAY / 10)
+                send(c, 2, code, tid, make_thumb(h - 1))
+                send(c, 3, 0x2001, tid)
+            last_info = None
         elif code == 0x101B:
             h, off, n = params
             data = FILES[h - 1][2][off:off + n]

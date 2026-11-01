@@ -20,6 +20,8 @@ sys.path.insert(0, str(HERE))
 import fake_camera  # noqa: E402
 from open_fujitransfer.protocol import ObjectInfo, parse_object_info  # noqa: E402
 from open_fujitransfer.sync import SyncListener, SyncOptions, run_sync, select_files  # noqa: E402
+from open_fujitransfer.session import CameraSession  # noqa: E402
+import queue  # noqa: E402
 
 
 class RecordingListener(SyncListener):
@@ -87,6 +89,48 @@ class AgainstFakeCamera(unittest.TestCase):
         result, _ = self.sync(list_only=True)
         self.assertEqual(len(result.files), 3)
         self.assertEqual(list(self.out.rglob("*.*")), [])
+
+
+    # ---- bladersessie (zonder venster) -----------------------------------
+
+    def wait_for(self, events, kind, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                msg = events.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if msg[0] == "error":
+                self.fail(msg[1])
+            if msg[0] == kind:
+                return msg
+        self.fail(f"geen {kind} binnen {timeout}s")
+
+    def test_session_browse_thumbs_and_download_selection(self):
+        events = queue.Queue()
+        session = CameraSession(events, host="127.0.0.1")
+        session.start()
+        try:
+            infos = self.wait_for(events, "scan_done")[1]
+            self.assertEqual(len(infos), len(fake_camera.FILES))
+            # De lijst heeft nog niet de echte grootte (D227 staat uit tijdens bladeren)
+            self.assertTrue(all(i.size == 100_000 for i in infos))
+
+            session.request_thumb(1)
+            _, handle, data = self.wait_for(events, "thumb")
+            self.assertEqual(handle, 1)
+            self.assertTrue(data and data[:2] == b"\xff\xd8", "thumbnail moet een JPEG zijn")
+
+            raf = next(i for i in infos if i.filename.endswith(".RAF"))
+            session.download([raf], self.out)
+            _, new, skipped = self.wait_for(events, "dl_all_done")
+            self.assertEqual((new, skipped), (1, 0))
+            expected = next(d for n, _, d in fake_camera.FILES if n == raf.filename)
+            self.assertEqual((self.out / raf.date_folder / raf.filename).read_bytes(), expected)
+            self.assertEqual(raf.size, len(expected))  # na download wel de echte grootte
+        finally:
+            session.close()
+            self.wait_for(events, "closed")
 
 
 class Parsing(unittest.TestCase):

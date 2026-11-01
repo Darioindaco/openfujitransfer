@@ -1,5 +1,5 @@
 """
-De Mac-app (Tkinter, zit standaard in Python — geen extra dependencies).
+De Mac-app (Tkinter; Pillow alleen voor de thumbnails in het bladervenster).
 
 Het werk (netwerk, downloaden) gebeurt in een aparte thread. Die stuurt
 berichten via een queue; het venster leest die queue elke 50 ms uit. Zo
@@ -9,6 +9,7 @@ blijft de UI soepel, en raakt alleen de hoofdthread Tkinter aan.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -21,13 +22,29 @@ from tkinter import filedialog, messagebox, ttk
 from . import APP_NAME, __version__
 from .protocol import CAMERA_IP, Cancelled, FujiError
 from .sync import DEFAULT_OUT, SyncListener, SyncOptions, human_size, run_sync
+from .gallery import GalleryWindow
 
 IS_MAC = sys.platform == "darwin"
 
 if IS_MAC:
     SETTINGS_FILE = Path("~/Library/Application Support/Open FujiTransfer/settings.json").expanduser()
+    LOG_FILE = Path("~/Library/Logs/Open FujiTransfer.log").expanduser()
 else:
     SETTINGS_FILE = Path("~/.config/open-fujitransfer/settings.json").expanduser()
+    LOG_FILE = Path("~/.cache/open-fujitransfer.log").expanduser()
+
+
+def setup_logging() -> None:
+    """Alles (ook elk netwerkpakket) naar een logbestand, nieuw per keer opstarten.
+    Als er iets hapert, staat hier precies waar."""
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(filename=LOG_FILE, filemode="w", level=logging.DEBUG,
+                            format="%(asctime)s.%(msecs)03d %(threadName)s %(message)s",
+                            datefmt="%H:%M:%S")
+        logging.getLogger("open_fujitransfer").info("%s %s gestart", APP_NAME, __version__)
+    except OSError:
+        pass
 
 FILE_TYPES = {"alles": (), "jpg": ("jpg",), "raf": ("raf",)}
 
@@ -62,6 +79,9 @@ class QueueListener(SyncListener):
     def status(self, message):
         self.q.put(("status", message))
 
+    def scan_progress(self, done, total):
+        self.q.put(("scan", done, total))
+
     def files_found(self, files):
         self.q.put(("files", files))
 
@@ -84,6 +104,7 @@ class App:
         self.root = root
         self.q: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
+        self.gallery: GalleryWindow | None = None
         self.cancel = threading.Event()
         self.rows: dict[int, str] = {}       # object-handle -> treeview-id
 
@@ -136,7 +157,7 @@ class App:
         for n, text in enumerate([
             "Camera: ▶ (afspelen) → MENU → Draadloze communicatie",
             "Mac: verbind met het WiFi-netwerk FUJIFILM-X-T3-…",
-            "Klik op Foto's ophalen en druk zo nodig OK op de camera",
+            "Klik op Bekijk camera en druk zo nodig OK op de camera",
         ], start=1):
             row = ttk.Frame(steps)
             row.pack(fill="x", pady=2)
@@ -169,12 +190,13 @@ class App:
         # Knoppen
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(16, 8))
-        self.go_button = ttk.Button(buttons, text="Foto's ophalen", style="Big.TButton",
-                                    command=self.start_download)
-        self.go_button.pack(side="left")
-        self.list_button = ttk.Button(buttons, text="Wat staat erop?", command=self.start_list)
-        self.list_button.pack(side="left", padx=8)
-        ttk.Button(buttons, text="Open map", command=self.open_folder).pack(side="right")
+        self.browse_button = ttk.Button(buttons, text="Bekijk camera", style="Big.TButton",
+                                        command=self.open_gallery)
+        self.browse_button.pack(side="left")
+        self.go_button = ttk.Button(buttons, text="Alle nieuwe ophalen", command=self.start_download)
+        self.go_button.pack(side="left", padx=8)
+        ttk.Button(buttons, text="Log", command=self.open_log).pack(side="right")
+        ttk.Button(buttons, text="Open map", command=self.open_folder).pack(side="right", padx=6)
 
         # Voortgang
         ttk.Label(outer, textvariable=self.status_text, style="Status.TLabel",
@@ -251,11 +273,32 @@ class App:
             return
         self._start(list_only=False)
 
-    def start_list(self):
-        if not (self.worker and self.worker.is_alive()):
-            self._start(list_only=True)
+    def open_gallery(self):
+        """Bladervenster met alle foto's op de camera."""
+        if self.worker and self.worker.is_alive():
+            return  # de camera kan maar één verbinding tegelijk aan
+        if self.gallery is not None and self.gallery.win.winfo_exists():
+            self.gallery.win.lift()
+            return
+        self._save()
+        opts = self._options(list_only=True)
+        self.gallery = GalleryWindow(self.root, opts.out_dir, opts.host)
+
+    def open_log(self):
+        if LOG_FILE.exists():
+            try:
+                # Op de Mac opent dit de Console-app; daar kun je zoeken en kopiëren
+                subprocess.Popen(["open" if IS_MAC else "xdg-open", str(LOG_FILE)])
+            except OSError:
+                pass
+        else:
+            messagebox.showinfo(APP_NAME, f"Nog geen logbestand ({LOG_FILE}).")
 
     def _start(self, list_only: bool):
+        if self.gallery is not None and self.gallery.win.winfo_exists():
+            messagebox.showinfo(APP_NAME, "Sluit eerst het camera-venster; de camera kan maar "
+                                          "één verbinding tegelijk aan.")
+            return
         self._save()
         self.cancel = threading.Event()
         self.tree.delete(*self.tree.get_children())
@@ -265,7 +308,7 @@ class App:
         self.overall_text.set("")
         self.file_text.set("")
         self.go_button.configure(text="Stop")
-        self.list_button.state(["disabled"])
+        self.browse_button.state(["disabled"])
 
         opts = self._options(list_only)
         listener = QueueListener(self.q)
@@ -279,6 +322,7 @@ class App:
             except FujiError as e:
                 self.q.put(("error", str(e)))
             except Exception as e:  # onverwacht: laat het zien in plaats van stil te falen
+                logging.getLogger("open_fujitransfer").exception("onverwachte fout")
                 self.q.put(("error", f"Onverwachte fout: {e!r}"))
 
         self.worker = threading.Thread(target=work, daemon=True)
@@ -298,10 +342,17 @@ class App:
         kind = msg[0]
         if kind == "status":
             self.status_text.set(msg[1])
+        elif kind == "scan":
+            _, done, total = msg
+            self.overall_bar["maximum"] = max(total, 1)
+            self.overall_bar["value"] = done
+            self.overall_text.set(f"Kaart uitlezen: {done} van {total}")
         elif kind == "files":
+            self.overall_bar["value"] = 0
             for info in msg[1]:
+                # De echte grootte weten we pas vlak voor het downloaden
                 self.rows[info.handle] = self.tree.insert("", "end", values=(
-                    info.filename, info.date_folder, human_size(info.size), "wacht"))
+                    info.filename, info.date_folder, "", "wacht"))
             self.overall_bar["maximum"] = max(len(msg[1]), 1)
         elif kind == "started":
             _, info, index, total = msg
@@ -319,6 +370,11 @@ class App:
         elif kind == "finished":
             _, info, outcome = msg
             self._set_row(info, outcome, outcome)
+            row = self.rows.get(info.handle)
+            if row:
+                values = list(self.tree.item(row, "values"))
+                values[2] = human_size(info.size)
+                self.tree.item(row, values=values)
             self.overall_bar["value"] = self.overall_bar["value"] + 1
         elif kind == "done":
             _, result, list_only = msg
@@ -330,7 +386,7 @@ class App:
             self._reset_buttons()
             self.status_text.set(msg[1])
             if msg[1] != "Gestopt.":
-                messagebox.showerror(APP_NAME, msg[1])
+                messagebox.showerror(APP_NAME, msg[1] + "\n\nDetails: knop 'Log'.")
 
     def _set_row(self, info, text, tag):
         row = self.rows.get(info.handle)
@@ -340,8 +396,8 @@ class App:
             self.tree.item(row, values=values, tags=(tag,))
 
     def _reset_buttons(self):
-        self.go_button.configure(text="Foto's ophalen")
-        self.list_button.state(["!disabled"])
+        self.go_button.configure(text="Alle nieuwe ophalen")
+        self.browse_button.state(["!disabled"])
 
     def on_close(self):
         self._save()
@@ -350,6 +406,7 @@ class App:
 
 
 def main():
+    setup_logging()
     root = tk.Tk()
     App(root)
     root.mainloop()

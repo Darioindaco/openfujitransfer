@@ -2,7 +2,7 @@
 
 **Foto's van je Fujifilm-camera via WiFi naar je Mac — open source, zonder de Fujifilm X App.**
 
-<img src="assets/screenshot.png" width="480" alt="Open FujiTransfer tijdens het downloaden">
+<img src="assets/screenshot-gallery.png" width="560" alt="Bladeren door de foto's op de camera"> <img src="assets/screenshot.png" width="300" alt="Hoofdvenster">
 
 Gemaakt voor de **X-T3**, en bedoeld voor X-camera's met *Draadloze communicatie*
 (X-T2, X-T3, X-H1, X-Pro2/3, X-T30, X-S10, …).
@@ -30,14 +30,16 @@ Gemaakt voor de **X-T3**, en bedoeld voor X-camera's met *Draadloze communicatie
    een netwerknaam als `FUJIFILM-X-T3-XXXX`.
 2. **Mac:** verbind via het WiFi-icoon met dat netwerk. (Je hebt zolang geen
    internet; dat hoort zo.)
-3. Klik in de app op **Foto's ophalen**. Vraagt de camera om bevestiging, druk op **OK**.
+3. Klik in de app op **Bekijk camera**. Vraagt de camera om bevestiging, druk op **OK**.
+4. Er opent een venster met al je foto's als thumbnails. Klik de foto's aan die je
+   wilt (Shift-klik voor een reeks, of **Alles** / **Alleen nieuwe**) en klik
+   **Download**.
+
+Of klik **Alle nieuwe ophalen** om zonder te kiezen alles binnen te halen wat je nog
+niet hebt.
 
 Foto's komen in `~/Pictures/Open FujiTransfer/JJJJ-MM-DD/`. Wat je al hebt (zelfde
-naam en grootte) wordt overgeslagen, dus je kunt elke keer gewoon alles ophalen.
-De app onthoudt je doelmap en keuzes.
-
-- **Wat staat erop?** — toont de kaart zonder te downloaden.
-- **Alleen JPEG / RAF**, **alleen de nieuwste N** — voor als je haast hebt.
+naam en grootte) wordt overgeslagen. De app onthoudt je doelmap en keuzes.
 
 ### RAW-bestanden
 
@@ -46,8 +48,8 @@ RAF's niet in de lijst, dan is dat de camera, niet de app.
 
 ## Command line
 
-Dezelfde app werkt ook in de terminal, vanuit de broncode (Python 3.9+, geen
-dependencies):
+Dezelfde app werkt ook in de terminal, vanuit de broncode (Python 3.9+; alleen
+voor de thumbnails is Pillow nodig: `pip install -r requirements.txt`):
 
 ```bash
 python3 -m open_fujitransfer --list           # wat staat erop
@@ -61,11 +63,14 @@ Of met de geïnstalleerde app:
 
 ## Werkt het niet?
 
-```bash
-python3 -m open_fujitransfer --list --verbose 2> log.txt
-```
+De app schrijft alles wat hij met de camera uitwisselt naar een logbestand:
+`~/Library/Logs/Open FujiTransfer.log` (knop **Log** in de app). Voeg dat toe aan
+een issue. Veelvoorkomend:
 
-en voeg `log.txt` toe aan een issue. Veelvoorkomend:
+- *Ik zie het WiFi-netwerk van de camera niet* — kies op de camera eerst ▶, dan
+  MENU → afspeelmenu → **WIRELESS COMMUNICATION**, en laat dat scherm openstaan.
+  Zet **Airplane mode** uit en **Bluetooth** uit (SET UP → CONNECTION SETTING); met
+  Bluetooth-koppeling wacht de camera op de telefoon-app.
 
 - *Kan de camera niet bereiken* — staat je Mac op het WiFi van de camera? Heb je de
   app toegang gegeven tot het lokale netwerk (Systeeminstellingen → Privacy en
@@ -85,7 +90,9 @@ dicht), vraagt per foto de `ObjectInfo` op en downloadt in blokken van 1 MB met
 open_fujitransfer/
   protocol.py   het Fuji WiFi-protocol (sockets, PTP-pakketten)
   sync.py       'haal alles op'-logica, gedeeld door app en CLI
-  gui.py        het venster (Tkinter)
+  session.py    open verbinding voor het bladervenster (één worker-thread)
+  gallery.py    het bladervenster met thumbnails
+  gui.py        het hoofdvenster (Tkinter)
   cli.py        de terminalversie
 tests/
   fake_camera.py  nep-camera om zonder echte camera te testen
@@ -97,7 +104,7 @@ packaging/      PyInstaller-recept en build-script voor de .app/.dmg
 
 ```bash
 python3 -m unittest discover -s tests -v      # tests
-python3 -m pip install pyinstaller
+python3 -m pip install pyinstaller -r requirements.txt
 bash packaging/build_macos.sh                 # → dist/OpenFujiTransfer-…-macos-<arch>.dmg
 ```
 
@@ -110,7 +117,7 @@ tag `v…` of via *Actions → Test en bouw → Run workflow* met **release** aa
 
 - **Via je thuis-WiFi** ("PC AUTO SAVE"): camera en Mac op hetzelfde netwerk, je
   houdt internet. Het protocol staat beschreven in libfuji (`docs/autosave.md`).
-- Thumbnails in de lijst, alleen geselecteerde foto's ophalen.
+- Grotere preview bij dubbelklik.
 
 ## Credits & licentie
 

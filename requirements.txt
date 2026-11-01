@@ -1,0 +1,1 @@
+pillow==11.0.0  # alleen voor thumbnails in het bladervenster

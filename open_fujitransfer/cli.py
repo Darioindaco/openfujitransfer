@@ -28,7 +28,13 @@ class TerminalListener(SyncListener):
     def files_found(self, files):
         if self.list_only:
             for i in files:
-                print(f"  {i.date_folder}  {i.filename:<14} {human_size(i.size):>9}")
+                print(f"  {i.date_folder}  {i.filename}")
+
+    def scan_progress(self, done, total):
+        sys.stdout.write(f"\r  kaart uitlezen: {done}/{total} ")
+        sys.stdout.flush()
+        if done == total:
+            print()
 
     def file_progress(self, info, done, total, bytes_per_sec):
         pct = done / total if total else 1
@@ -52,7 +58,14 @@ def main(argv=None) -> int:
     p.add_argument("--host", default=CAMERA_IP, help=f"IP van de camera (standaard {CAMERA_IP})")
     p.add_argument("--verbose", "-v", action="store_true", help="toon alle pakketten")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
+    p.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
+
+    if args.selftest:  # gebruikt door de build: zit alles in de app?
+        import tkinter  # noqa: F401
+        from PIL import Image, ImageTk  # noqa: F401
+        print(f"{APP_NAME} {__version__}: tkinter en Pillow aanwezig")
+        return 0
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
                         format="  [debug] %(message)s")
