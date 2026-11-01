@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Maak een release (tag v<versie> uit open_fujitransfer/__init__.py)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # nodig om bij een tag een release te maken
@@ -44,8 +49,15 @@ jobs:
         with:
           name: OpenFujiTransfer-macos-${{ matrix.arch }}
           path: dist/*.dmg
-      - name: Release bij een versietag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Versie uitlezen
+        id: version
+        run: echo "tag=v$(python -c 'import open_fujitransfer as o; print(o.__version__)')" >> "$GITHUB_OUTPUT"
+      # Release bij een gepushte tag v…, of handmatig via Actions → "Run workflow" → release aanvinken
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.version.outputs.tag }}
+          name: Open FujiTransfer ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/*.dmg
