@@ -1,0 +1,51 @@
+name: Test en bouw
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # nodig om bij een tag een release te maken
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests -v
+
+  macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest      # Apple Silicon (M1/M2/M3/...)
+            arch: arm64
+          - runner: macos-15-intel    # Intel-Macs
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyinstaller==6.11.1
+      - run: bash packaging/build_macos.sh
+      - name: Rooktest (binary start op als CLI)
+        run: '"dist/Open FujiTransfer.app/Contents/MacOS/Open FujiTransfer" --version'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenFujiTransfer-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+      - name: Release bij een versietag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
